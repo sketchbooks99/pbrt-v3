@@ -1,5 +1,6 @@
 *~
 src/build
+src/debug_build
 src/bin
 src/objs
 .sconsign.dblite

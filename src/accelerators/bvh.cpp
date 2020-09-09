@@ -37,6 +37,11 @@
 #include "paramset.h"
 #include "stats.h"
 #include "parallel.h"
+#include "shapes/plane.h"
+#include "material.h"
+#include "materials/matte.h"
+#include "texture.h"
+#include "textures/constant.h"
 #include <algorithm>
 
 namespace pbrt {
@@ -101,6 +106,7 @@ struct LinearBVHNode {
     uint16_t nPrimitives;  // 0 -> interior node
     uint8_t axis;          // interior node: xyz
     uint8_t pad[1];        // ensure 32 byte total size
+    std::vector<std::shared_ptr<GeometricPrimitive>> box;
 };
 
 // BVHAccel Utility Functions
@@ -641,11 +647,26 @@ int BVHAccel::flattenBVHTree(BVHBuildNode *node, int *offset) {
     LinearBVHNode *linearNode = &nodes[*offset];
     linearNode->bounds = node->bounds;
     int myOffset = (*offset)++;
+
+    // For visualize Bounding Volume Hierarchy
+    std::shared_ptr<Texture<Spectrum>> Kd = std::make_shared<ConstantTexture<Spectrum>>(Spectrum(0.5f));
+    std::shared_ptr<Texture<Float>> sigma = std::make_shared<ConstantTexture<Float>>(0.f);
+    std::shared_ptr<Texture<Float>> bumpMap = nullptr;
+    std::shared_ptr<Material> mtl = std::make_shared<MatteMaterial>(Kd, sigma, bumpMap);
+    MediumInterface mi = MediumInterface();
+    Transform o2w = Transform(Matrix4x4()), w2o = Transform(Matrix4x4());
+    bool reverseOrientation = false;
+
     if (node->nPrimitives > 0) {
         CHECK(!node->children[0] && !node->children[1]);
         CHECK_LT(node->nPrimitives, 65536);
         linearNode->primitivesOffset = node->firstPrimOffset;
         linearNode->nPrimitives = node->nPrimitives;
+        std::vector<std::shared_ptr<Shape>> planes = CreateAABBShape(&o2w, &w2o, reverseOrientation, 
+                        linearNode->bounds.pMin, linearNode->bounds.pMax);
+        for(auto plane : planes) {
+            linearNode->box.push_back(std::make_shared<GeometricPrimitive>(plane, mtl, nullptr, mi));
+        }
     } else {
         // Create interior flattened BVH node
         linearNode->axis = node->splitAxis;
@@ -653,6 +674,11 @@ int BVHAccel::flattenBVHTree(BVHBuildNode *node, int *offset) {
         flattenBVHTree(node->children[0], offset);
         linearNode->secondChildOffset =
             flattenBVHTree(node->children[1], offset);
+        std::vector<std::shared_ptr<Shape>> planes = CreateAABBShape(&o2w, &w2o, reverseOrientation, 
+                        linearNode->bounds.pMin, linearNode->bounds.pMax);
+        for(auto plane : planes) {
+            linearNode->box.push_back(std::make_shared<GeometricPrimitive>(plane, mtl, nullptr, mi));
+        }
     }
     return myOffset;
 }
@@ -668,19 +694,38 @@ bool BVHAccel::Intersect(const Ray &ray, SurfaceInteraction *isect) const {
     // Follow ray through BVH nodes to find primitive intersections
     int toVisitOffset = 0, currentNodeIndex = 0;
     int nodesToVisit[64];
+    int loopCount = 0;
+
     while (true) {
         const LinearBVHNode *node = &nodes[currentNodeIndex];
+
         // Check ray against BVH node
         if (node->bounds.IntersectP(ray, invDir, dirIsNeg)) {
             if (node->nPrimitives > 0) {
                 // Intersect ray with primitives in leaf BVH node
-                for (int i = 0; i < node->nPrimitives; ++i)
-                    if (primitives[node->primitivesOffset + i]->Intersect(
-                            ray, isect))
-                        hit = true;
+                for (int i = 0; i < node->nPrimitives; ++i) {
+                    // if (primitives[node->primitivesOffset + i]->Intersect(
+                    //         ray, isect)) {
+                    //     return true;
+                    // }
+                    for(auto plane : node->box) {
+                        if(plane->Intersect(ray, isect)) {
+                            hit = true;
+                            break;
+                        }
+                    }
+                }
                 if (toVisitOffset == 0) break;
                 currentNodeIndex = nodesToVisit[--toVisitOffset];
-            } else {
+            } 
+            // if(loopCount == 1) {
+            //     for(auto plane : node->box) {
+            //         if(plane->Intersect(ray, isect)) 
+            //             hit = true;
+            //     }
+            //     break;
+            // }
+            else {
                 // Put far BVH node on _nodesToVisit_ stack, advance to near
                 // node
                 if (dirIsNeg[node->axis]) {
@@ -695,6 +740,7 @@ bool BVHAccel::Intersect(const Ray &ray, SurfaceInteraction *isect) const {
             if (toVisitOffset == 0) break;
             currentNodeIndex = nodesToVisit[--toVisitOffset];
         }
+        loopCount++;
     }
     return hit;
 }
@@ -706,20 +752,41 @@ bool BVHAccel::IntersectP(const Ray &ray) const {
     int dirIsNeg[3] = {invDir.x < 0, invDir.y < 0, invDir.z < 0};
     int nodesToVisit[64];
     int toVisitOffset = 0, currentNodeIndex = 0;
+    int loopCount = 0; // To debug tree node index
     while (true) {
         const LinearBVHNode *node = &nodes[currentNodeIndex];
+
+        // if(loopCount == 2) {
+        //     printf("[IntersectP] CurrentNodeIndex: %d, loopCount: %d\n", currentNodeIndex, loopCount);
+        //     std::cout << "Bounds: " << node->bounds << std::endl;
+        //     fflush(stdout);
+        // }
+
         if (node->bounds.IntersectP(ray, invDir, dirIsNeg)) {
             // Process BVH node _node_ for traversal
             if (node->nPrimitives > 0) {
                 for (int i = 0; i < node->nPrimitives; ++i) {
-                    if (primitives[node->primitivesOffset + i]->IntersectP(
-                            ray)) {
-                        return true;
+                    // if (primitives[node->primitivesOffset + i]->IntersectP(
+                    //         ray)) {
+                    //     return true;
+                    // }
+                    for(auto plane : node->box) {
+                        if(plane->IntersectP(ray)) {
+                            return true;
+                        }
                     }
                 }
                 if (toVisitOffset == 0) break;
                 currentNodeIndex = nodesToVisit[--toVisitOffset];
-            } else {
+            } 
+            // if(loopCount == 1) {
+            //     for(auto plane : node->box) {
+            //         if(plane->IntersectP(ray)) 
+            //             return true;
+            //     }
+            //     break;
+            // }
+            else {
                 if (dirIsNeg[node->axis]) {
                     /// second child first
                     nodesToVisit[toVisitOffset++] = currentNodeIndex + 1;
@@ -733,6 +800,7 @@ bool BVHAccel::IntersectP(const Ray &ray) const {
             if (toVisitOffset == 0) break;
             currentNodeIndex = nodesToVisit[--toVisitOffset];
         }
+        loopCount++;
     }
     return false;
 }

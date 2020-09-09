@@ -600,6 +600,7 @@ class Normal3 {
     }
     template <typename U>
     Normal3<T> operator/(U f) const {
+        std::cout << f << std::endl; fflush(stdout);
         CHECK_NE(f, 0);
         Float inv = (Float)1 / f;
         return Normal3<T>(x * inv, y * inv, z * inv);
