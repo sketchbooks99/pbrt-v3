@@ -64,12 +64,28 @@ bool Plane::Intersect(const Ray &r, Float *tHit, SurfaceInteraction *isect,
     Float u = (a - a0) / (a1 - a0);
     Float v = (b - b0) / (b1 - b0);
 
+    // Tangent vector on plane
     Vector3f dpdu(1,0,0), dpdv(0,1,0);
+    switch(axisType) {
+    case PlaneAxis::XY: {
+        dpdu = Vector3f(1,0,0); dpdv = Vector3f(0,1,0);
+        break;
+    }
+    case PlaneAxis::XZ: {
+        dpdu = Vector3f(1,0,0); dpdv = Vector3f(0,0,1);
+        break;
+    }
+    case PlaneAxis::YZ: {
+        dpdu = Vector3f(0,1,0); dpdv = Vector3f(0,0,1);
+        break;
+    }
+    }
 
     Normal3f dndu(0,0,0), dndv(0,0,0);
 
     Vector3f pError(0,0,0);
 
+    // BUG: Zero division occurs when calculating Normal from dpdu and dpdv. 
     // Initialize _SurfaceIntersection_ from parametric information
     *isect = (*ObjectToWorld)(SurfaceInteraction(pHit, pError, Point2f(u, v),
                                                  -r.d, dpdu, dpdv, dndu, dndv,
@@ -165,7 +181,8 @@ std::vector<std::shared_ptr<Shape>> CreateAABBShape(
 
     std::vector<std::shared_ptr<Shape>> aabb;
 
-    // TODO: Calculate Transform for each plane.
+    // TODO: 
+    // - To apply Transform(Translate, Rotate, Scale) function for o2w(w2o).
 
     // XY Plane
     aabb.push_back(CreatePlaneShape(o2w, w2o, reverseOrientation,

@@ -706,7 +706,7 @@ bool BVHAccel::Intersect(const Ray &ray, SurfaceInteraction *isect) const {
                 for (int i = 0; i < node->nPrimitives; ++i) {
                     // if (primitives[node->primitivesOffset + i]->Intersect(
                     //         ray, isect)) {
-                    //     return true;
+                    //     hit = true;
                     // }
                     for(auto plane : node->box) {
                         if(plane->Intersect(ray, isect)) {
